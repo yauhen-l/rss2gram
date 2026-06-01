@@ -1,13 +1,11 @@
 import feedparser
 import telebot
+import requests
 import json
 import traceback
 from time import mktime
 from datetime import datetime
 import os
-import socket
-
-socket.setdefaulttimeout(30)
 
 config = "/home/vasa/rss2gram/config.json"
 processed_file = "/home/vasa/rss2gram/processed"
@@ -30,10 +28,12 @@ try:
         print("Last time {}".format(last_time))
 
         try:
-            feed = feedparser.parse(url)
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
         except Exception as e:
             print("Error happened on parsing feed " + url, e)
-            bot.send_message(chat_id, "Failed to parse feed " + url + " " + e)
+            bot.send_message(chat_id, "Failed to parse feed " + url + " " + str(e))
             continue
         for e in feed.entries[::-1]:
             e_time = datetime.fromtimestamp(mktime(e["published_parsed"]))
