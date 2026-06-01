@@ -5,6 +5,9 @@ import traceback
 from time import mktime
 from datetime import datetime
 import os
+import socket
+
+socket.setdefaulttimeout(30)
 
 config = "/home/vasa/rss2gram/config.json"
 processed_file = "/home/vasa/rss2gram/processed"
