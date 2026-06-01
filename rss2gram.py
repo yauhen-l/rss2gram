@@ -4,17 +4,15 @@ import json
 import traceback
 from time import mktime
 from datetime import datetime
-import html
 import os
 
 config = "/home/vasa/rss2gram/config.json"
 processed_file = "/home/vasa/rss2gram/processed"
-processed_items = {}
-processed_items_new = {}
+processed_items = set()
 
 with open(processed_file) as file:
     for line in file:
-        processed_items[line.rstrip()] = True
+        processed_items.add(line.rstrip())
 
 data = json.load( open( config) )
 
@@ -33,10 +31,11 @@ try:
         except Exception as e:
             print("Error happened on parsing feed " + url, e)
             bot.send_message(chat_id, "Failed to parse feed " + url + " " + e)
+            continue
         for e in feed.entries[::-1]:
             e_time = datetime.fromtimestamp(mktime(e["published_parsed"]))
             e_link = e["link"]
-            if e_time > last_time and not e_link in processed_items:
+            if e_time > last_time and e_link not in processed_items:
                 print("Sending post from {}".format(e_time))
                 msg_template = '*{title}* \n [LINK]({link})'
                 if 'comments' in e:
@@ -45,13 +44,12 @@ try:
                 print(msg)
                 bot.send_message(chat_id, msg)
                 last_time = e_time
-                processed_items_new[e_link] = True
+                processed_items.add(e_link)
+                with open(processed_file, "a") as pf:
+                    pf.write(e_link + '\n')
             data[url] = "{}".format(last_time)
 except Exception as e:
     print("Error happened ", e)
     traceback.print_exc()
 finally:
     json.dump(data, open( config, 'w' ))
-    with open(processed_file, "a") as file:
-        for link in processed_items_new:
-            file.write(link + '\n')
