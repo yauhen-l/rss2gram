@@ -1,6 +1,8 @@
 import feedparser
 import telebot
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import json
 import traceback
 from time import mktime
@@ -21,6 +23,12 @@ token = os.getenv('TELEGRAM_BOT_TOKEN')
 chat_id = os.getenv('TELEGRAM_CHAT_ID')
 bot = telebot.TeleBot(token, parse_mode="MARKDOWN")
 
+session = requests.Session()
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+adapter = HTTPAdapter(max_retries=retries)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
 try:
     for url in data:
         print(url)
@@ -28,7 +36,7 @@ try:
         print("Last time {}".format(last_time))
 
         try:
-            response = requests.get(url, timeout=10)
+            response = session.get(url, timeout=10)
             response.raise_for_status()
             feed = feedparser.parse(response.content)
         except Exception as e:
