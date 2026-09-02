@@ -60,7 +60,7 @@ try:
                     info = res.info
                     parts = (info.location.country, info.location.region, info.location.city)
                     loc = ", ".join(p for p in parts if p) or "—"
-                    flag = "✅" if info.relevant_for_germans else "➖"
+                    flag = "✅" if info.practical_impact else "➖"
                     scrape_note = "" if res.scraped else "\n\U000026A0 summary from RSS teaser only"
                     msg = "*{title}*\n{flag} \U0001F4CD {loc} | \U0001F3F7 {cat}{note}\n\n{summary}\n\n{links}".format(
                         title=e["title"],

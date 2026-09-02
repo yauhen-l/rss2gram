@@ -57,27 +57,48 @@ class ArticleInfo(BaseModel):
     location: Location
     category: Category
     summary_ru: str = Field(description="Exactly 4 sentences, in Russian.")
-    relevant_for_germans: bool = Field(
+    impact_reason: str = Field(
+        description="One short English sentence: what concrete thing, if anything, "
+        "a resident of Germany would decide or do differently after reading this."
+    )
+    practical_impact: bool = Field(
         description=(
-            "True only if this reports a real social, economic, or political "
-            "change that meaningfully affects the everyday life of an average "
-            "person living in Germany. False for foreign news with no German "
-            "impact, sport, celebrity, local curiosities, and routine coverage."
+            "True ONLY if an average resident of Germany would plausibly change a "
+            "real decision or action after reading this - things like: money "
+            "(prices, taxes, benefits, pensions, energy bills, wages), law and "
+            "rules (new regulations, deadlines, permits, registration, visas), "
+            "infrastructure and public services they personally use (transport, "
+            "healthcare, schools, utilities, strikes, closures), local safety, or "
+            "consumer and product warnings. "
+            "False for: military/defence procurement and weapons tests, foreign "
+            "politics and diplomacy, war coverage, party manoeuvring with nothing "
+            "enacted, opinion and analysis, sport, culture, celebrity, isolated "
+            "crime, and general background pieces. When unsure, answer false."
         )
     )
 
+
+IMPACT_KEY = "practical_impact"
 
 SYSTEM = (
     "You analyse news articles. Determine the geographic location the article is "
     "about (country, region, city; use null for parts that do not apply), pick "
     "the single best category, write a summary of exactly 4 sentences in Russian "
-    "based only on the text provided, and judge whether the article is relevant "
-    "for an average person living in Germany.\n\n"
+    "based only on the text provided, then decide practical_impact per its rule "
+    "below - default to false, and set it true only when you can name the concrete "
+    "action or decision a resident would change.\n\n"
+    "practical_impact is true ONLY if an average resident of Germany would "
+    "plausibly change a real decision or action after reading this (money, law "
+    "and rules, public services they use, local safety, consumer warnings). It is "
+    "false for military and weapons news, foreign politics, war coverage, "
+    "un-enacted political manoeuvring, opinion, sport, culture, celebrity, "
+    "isolated crime, and background pieces.\n\n"
     "Reply with ONLY a JSON object, no prose, no markdown fences, matching:\n"
     '{"location": {"country": str|null, "region": str|null, "city": str|null}, '
     '"category": one of ' + json.dumps(list(Category.__args__)) + ", "
     '"summary_ru": "<exactly 4 sentences in Russian>", '
-    '"relevant_for_germans": true|false}'
+    '"impact_reason": "<one short English sentence>", '
+    '"practical_impact": true|false}'
 )
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
