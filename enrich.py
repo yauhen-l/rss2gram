@@ -9,6 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Optional
 
 import anthropic
@@ -17,7 +18,7 @@ import trafilatura
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv()  # pull ANTHROPIC_API_KEY / TELEGRAM_* from a .env file if present
+load_dotenv(Path(__file__).with_name(".env"))  # ANTHROPIC_API_KEY / TELEGRAM_*, cwd-independent
 
 # An identity-linked API key must also name the workspace it acts in.
 _workspace_id = os.getenv("ANTHROPIC_WORKSPACE_ID")

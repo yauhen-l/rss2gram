@@ -22,6 +22,7 @@ data = json.load( open( config) )
 
 token = os.getenv('TELEGRAM_BOT_TOKEN')
 chat_id = os.getenv('TELEGRAM_CHAT_ID')
+useful_chat_id = os.getenv('TELEGRAM_USEFUL_GERMANY_CHAT_ID')
 bot = telebot.TeleBot(token, parse_mode="MARKDOWN")
 
 session = requests.Session()
@@ -54,6 +55,7 @@ try:
                     links += ' [COMMENTS]({comments})'.format(**e)
 
                 msg = '*{title}* \n '.format(**e) + links
+                target_chat_id = chat_id
 
                 try:
                     res = enrich(e)
@@ -71,11 +73,13 @@ try:
                         summary=info.summary_ru,
                         links=links,
                     )
+                    if info.practical_impact and useful_chat_id:
+                        target_chat_id = useful_chat_id
                 except Exception as ex:
                     print("Enrich failed for " + e_link, ex)
 
                 print(msg)
-                bot.send_message(chat_id, msg)
+                bot.send_message(target_chat_id, msg)
                 last_time = e_time
                 processed_items.add(e_link)
                 with open(processed_file, "a") as pf:
