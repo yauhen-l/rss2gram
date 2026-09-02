@@ -5,7 +5,9 @@ blocked by most news sites), fall back to the text carried in the RSS entry, and
 hand whatever we have to Claude.
 """
 
+import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -70,8 +72,19 @@ SYSTEM = (
     "about (country, region, city; use null for parts that do not apply), pick "
     "the single best category, write a summary of exactly 4 sentences in Russian "
     "based only on the text provided, and judge whether the article is relevant "
-    "for an average person living in Germany."
+    "for an average person living in Germany.\n\n"
+    "Reply with ONLY a JSON object, no prose, no markdown fences, matching:\n"
+    '{"location": {"country": str|null, "region": str|null, "city": str|null}, '
+    '"category": one of ' + json.dumps(list(Category.__args__)) + ", "
+    '"summary_ru": "<exactly 4 sentences in Russian>", '
+    '"relevant_for_germans": true|false}'
 )
+
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def _parse_reply(text: str) -> ArticleInfo:
+    return ArticleInfo.model_validate_json(_FENCE.sub("", text).strip())
 
 
 @dataclass
@@ -107,18 +120,27 @@ def enrich(entry) -> Result:
     scraped = bool(article)
     body = (article or _feed_text(entry))[:MAX_BODY_CHARS]
 
-    response = client.messages.parse(
-        model=MODEL,
-        max_tokens=2048,
-        system=SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": f"Title: {title}\nURL: {link}\n\nArticle text:\n{body}",
-        }],
-        output_format=ArticleInfo,
-    )
+    messages = [{
+        "role": "user",
+        "content": f"Title: {title}\nURL: {link}\n\nArticle text:\n{body}",
+    }]
 
-    if response.parsed_output is None:
-        raise RuntimeError(f"No parsed output (stop_reason={response.stop_reason})")
+    last_err = None
+    for _ in range(2):
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            system=SYSTEM,
+            messages=messages,
+        )
+        text = "".join(b.text for b in response.content if b.type == "text")
+        try:
+            return Result(info=_parse_reply(text), scraped=scraped)
+        except Exception as ex:  # noqa: BLE001 - retry once with the model's own output
+            last_err = ex
+            messages += [
+                {"role": "assistant", "content": text},
+                {"role": "user", "content": f"Invalid: {ex}. Reply with only the JSON object."},
+            ]
 
-    return Result(info=response.parsed_output, scraped=scraped)
+    raise RuntimeError(f"Bad JSON from model: {last_err}")

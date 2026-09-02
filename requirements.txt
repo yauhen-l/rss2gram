@@ -2,7 +2,7 @@ feedparser
 pyTelegramBotAPI
 requests
 anthropic
-pydantic
+pydantic>=2
 python-dotenv
 trafilatura
 lxml_html_clean
