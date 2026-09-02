@@ -1,6 +1,7 @@
 import feedparser
 import telebot
 import requests
+from enrich import enrich
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import json
@@ -48,10 +49,31 @@ try:
             e_link = e["link"]
             if e_time > last_time and e_link not in processed_items:
                 print("Sending post from {}".format(e_time))
-                msg_template = '*{title}* \n [LINK]({link})'
+                links = '[LINK]({link})'.format(**e)
                 if 'comments' in e:
-                    msg_template =  msg_template + ' [COMMENTS]({comments})'
-                msg = msg_template.format(**e)
+                    links += ' [COMMENTS]({comments})'.format(**e)
+
+                msg = '*{title}* \n '.format(**e) + links
+
+                try:
+                    res = enrich(e)
+                    info = res.info
+                    parts = (info.location.country, info.location.region, info.location.city)
+                    loc = ", ".join(p for p in parts if p) or "—"
+                    flag = "✅" if info.relevant_for_germans else "➖"
+                    scrape_note = "" if res.scraped else "\n\U000026A0 summary from RSS teaser only"
+                    msg = "*{title}*\n{flag} \U0001F4CD {loc} | \U0001F3F7 {cat}{note}\n\n{summary}\n\n{links}".format(
+                        title=e["title"],
+                        flag=flag,
+                        loc=loc,
+                        cat=info.category,
+                        note=scrape_note,
+                        summary=info.summary_ru,
+                        links=links,
+                    )
+                except Exception as ex:
+                    print("Enrich failed for " + e_link, ex)
+
                 print(msg)
                 bot.send_message(chat_id, msg)
                 last_time = e_time

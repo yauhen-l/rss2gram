@@ -1,3 +1,7 @@
 feedparser
 pyTelegramBotAPI
-
+requests
+anthropic
+pydantic
+python-dotenv
+trafilatura
