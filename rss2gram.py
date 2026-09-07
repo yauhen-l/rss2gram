@@ -64,12 +64,15 @@ try:
                     loc = ", ".join(p for p in parts if p) or "—"
                     flag = "✅" if info.practical_impact else "➖"
                     scrape_note = "" if res.scraped else "\n\U000026A0 summary from RSS teaser only"
-                    msg = "*{title}*\n{flag} \U0001F4CD {loc} | \U0001F3F7 {cat}{note}\n\n{summary}\n\n{links}".format(
+                    kw = ", ".join(info.keywords)
+                    kw_line = "\n\U0001F511 {}".format(kw) if kw else ""
+                    msg = "*{title}*\n{flag} \U0001F4CD {loc} | \U0001F3F7 {cat}{note}{kw_line}\n\n{summary}\n\n{links}".format(
                         title=e["title"],
                         flag=flag,
                         loc=loc,
                         cat=info.category,
                         note=scrape_note,
+                        kw_line=kw_line,
                         summary=info.summary_ru,
                         links=links,
                     )

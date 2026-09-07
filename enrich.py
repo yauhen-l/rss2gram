@@ -10,7 +10,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 import anthropic
 import requests
@@ -57,6 +57,13 @@ class Location(BaseModel):
 class ArticleInfo(BaseModel):
     location: Location
     category: Category
+    keywords: List[str] = Field(
+        description=(
+            "3 to 6 short lowercase keyword phrases (1-3 words each) naming the "
+            "concrete people, organisations, places, events or themes the article "
+            "is about. English."
+        )
+    )
     summary_ru: str = Field(description="Exactly 4 sentences, in Russian.")
     impact_reason: str = Field(
         description="One short English sentence: what concrete thing, if anything, "
@@ -87,8 +94,11 @@ IMPACT_KEY = "practical_impact"
 SYSTEM = (
     "You analyse news articles. Determine the geographic location the article is "
     "about (country, region, city; use null for parts that do not apply), pick "
-    "the single best category, write a summary of exactly 4 sentences in Russian "
-    "based only on the text provided, then decide practical_impact per its rule "
+    "the single best category, extract 3-6 short keyword phrases (lowercase, "
+    "1-3 words, English) naming the concrete people, organisations, places, "
+    "events or themes the article is about, write a summary of exactly 4 "
+    "sentences in Russian based only on the text provided, then decide "
+    "practical_impact per its rule "
     "below - default to false, and set it true only when you can name the concrete "
     "action or decision a resident would change.\n\n"
     "practical_impact is true ONLY for a nationwide change in Germany (or one "
@@ -102,6 +112,7 @@ SYSTEM = (
     "Reply with ONLY a JSON object, no prose, no markdown fences, matching:\n"
     '{"location": {"country": str|null, "region": str|null, "city": str|null}, '
     '"category": one of ' + json.dumps(list(Category.__args__)) + ", "
+    '"keywords": ["<3-6 short lowercase English keyword phrases>"], '
     '"summary_ru": "<exactly 4 sentences in Russian>", '
     '"impact_reason": "<one short English sentence>", '
     '"practical_impact": true|false}'
