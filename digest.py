@@ -1,13 +1,15 @@
 """Daily topic digest.
 
 Aggregates the articles ``rss2gram.py`` stored in SQLite over a time window
-(default: the last 24 hours), groups them by category, and sends a compact
+(default: the last 24 hours), groups them into story clusters with Claude (see
+``cluster.py``), lays the clusters out under their category, and sends a compact
 summary to Telegram. Intended to be run once a day from cron.
 
 Usage:
     python digest.py                 # last 24h
     python digest.py --hours 48      # last 48h
     python digest.py --since 2026-09-06        # since local midnight of that day
+    python digest.py --no-cluster    # skip the Claude call, one line per article
     python digest.py --dry-run       # print, do not send
 
 Chat id: TELEGRAM_DIGEST_CHAT_ID, falling back to TELEGRAM_CHAT_ID.
@@ -23,6 +25,7 @@ import telebot
 from dotenv import load_dotenv
 
 import store
+from cluster import cluster as cluster_articles
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -35,6 +38,7 @@ def parse_args():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--hours", type=float, default=24.0)
     g.add_argument("--since", metavar="YYYY-MM-DD")
+    p.add_argument("--no-cluster", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -54,48 +58,73 @@ def place(row) -> str:
 
 def build(conn, since: datetime):
     since_iso = since.isoformat()
-    rows = conn.execute(
-        """SELECT id, link, title, category, country, region, city
-               FROM articles
-              WHERE published >= ?
-           ORDER BY category, published DESC""",
-        (since_iso,),
-    ).fetchall()
     cols = ["id", "link", "title", "category", "country", "region", "city"]
-    rows = [dict(zip(cols, r)) for r in rows]
-
-    kw_counts = Counter(
-        k
-        for (k,) in conn.execute(
-            """SELECT kw.keyword
-                   FROM keywords kw
-                   JOIN articles a ON a.id = kw.article_id
-                  WHERE a.published >= ?""",
+    rows = [
+        dict(zip(cols, r))
+        for r in conn.execute(
+            f"""SELECT {", ".join(cols)}
+                   FROM articles
+                  WHERE published >= ?
+               ORDER BY published DESC""",
             (since_iso,),
         )
-    )
+    ]
+
+    kw_by_article = {}
+    kw_counts = Counter()
+    for aid, kw in conn.execute(
+        """SELECT kw.article_id, kw.keyword
+               FROM keywords kw
+               JOIN articles a ON a.id = kw.article_id
+              WHERE a.published >= ?""",
+        (since_iso,),
+    ):
+        kw_by_article.setdefault(aid, []).append(kw)
+        kw_counts[kw] += 1
+    for r in rows:
+        r["keywords"] = kw_by_article.get(r["id"], [])
+
     return rows, kw_counts
 
 
-def render(rows, kw_counts, since: datetime):
+def _bullet(r) -> str:
+    loc = place(r)
+    loc = " — _{}_".format(loc) if loc else ""
+    return "• [{}]({}){}".format(r["title"], r["link"], loc)
+
+
+def render(rows, kw_counts, clusters, since: datetime):
     if not rows:
         return ["\U0001F4F0 No articles since {:%Y-%m-%d %H:%M}.".format(since)]
 
-    by_cat = {}
-    for r in rows:
-        by_cat.setdefault(r["category"] or "Other", []).append(r)
+    by_id = {r["id"]: r for r in rows}
 
-    header = "\U0001F4F0 *Daily digest* — {n} articles since {t:%Y-%m-%d %H:%M}".format(
-        n=len(rows), t=since
+    header = "\U0001F4F0 *Daily digest* — {n} articles / {c} topics since {t:%Y-%m-%d %H:%M}".format(
+        n=len(rows), c=len(clusters), t=since
     )
 
+    # attach each cluster to the category most of its articles carry
+    cat_clusters = {}
+    for c in clusters:
+        arts = [by_id[i] for i in c["ids"] if i in by_id]
+        if not arts:
+            continue
+        cat = Counter(a["category"] or "Other" for a in arts).most_common(1)[0][0]
+        cat_clusters.setdefault(cat, []).append((c["label"], arts))
+
     blocks = [header]
-    for cat in sorted(by_cat):
-        lines = ["\n*{}* ({})".format(cat, len(by_cat[cat]))]
-        for r in by_cat[cat]:
-            loc = place(r)
-            loc = " — _{}_".format(loc) if loc else ""
-            lines.append("• [{}]({}){}".format(r["title"], r["link"], loc))
+    for cat in sorted(cat_clusters):
+        items = cat_clusters[cat]
+        n = sum(len(a) for _, a in items)
+        # multi-article stories first (largest first), then singletons
+        items.sort(key=lambda it: -len(it[1]))
+        lines = ["\n*{}* ({})".format(cat, n)]
+        for label, arts in items:
+            if len(arts) == 1:
+                lines.append(_bullet(arts[0]))
+            else:
+                lines.append("▸ *{}* ({})".format(label, len(arts)))
+                lines += ["  " + _bullet(a) for a in arts]
         blocks.append("\n".join(lines))
 
     if kw_counts:
@@ -125,7 +154,12 @@ def main():
     rows, kw_counts = build(conn, since)
     conn.close()
 
-    msgs = render(rows, kw_counts, since)
+    if args.no_cluster:
+        clusters = [{"label": r["title"], "ids": [r["id"]]} for r in rows]
+    else:
+        clusters = cluster_articles(rows)
+
+    msgs = render(rows, kw_counts, clusters, since)
 
     if args.dry_run:
         print(("\n\n" + "-" * 60 + "\n\n").join(msgs))
