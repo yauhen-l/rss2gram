@@ -24,4 +24,27 @@ Config is in fomrat:
 }
 ```
 
-And `processed` file contains all URL that are already processed to eliminate duplicates.
+## Article store
+
+Sent articles are written to a local SQLite database `articles.db` (next to the
+scripts): link, feed, title, published date, category, location, keywords,
+practical-impact flag and the chat it was sent to. The `link` column also
+replaces the old flat `processed` file for de-duplication.
+
+To migrate an existing `processed` file into the database once:
+```
+python migrate_processed.py [path-to-processed]
+```
+
+## Daily digest
+
+`digest.py` aggregates the stored articles over a time window (default: last
+24h), groups them by category, lists titles with location, and adds a top
+keywords block. Run it once a day from cron:
+```
+python digest.py                 # last 24h
+python digest.py --hours 48
+python digest.py --since 2026-09-06
+python digest.py --dry-run        # print instead of sending
+```
+It sends to `TELEGRAM_DIGEST_CHAT_ID`, falling back to `TELEGRAM_CHAT_ID`.

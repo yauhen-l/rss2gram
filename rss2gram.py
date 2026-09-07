@@ -2,6 +2,7 @@ import feedparser
 import telebot
 import requests
 from enrich import enrich
+import store
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import json
@@ -11,12 +12,9 @@ from datetime import datetime
 import os
 
 config = "/home/vasa/rss2gram/config.json"
-processed_file = "/home/vasa/rss2gram/processed"
-processed_items = set()
 
-with open(processed_file) as file:
-    for line in file:
-        processed_items.add(line.rstrip())
+conn = store.connect()
+processed_items = store.seen_links(conn)
 
 data = json.load( open( config) )
 
@@ -56,6 +54,7 @@ try:
 
                 msg = '*{title}* \n '.format(**e) + links
                 target_chat_id = chat_id
+                res = None
 
                 try:
                     res = enrich(e)
@@ -85,11 +84,27 @@ try:
                 bot.send_message(target_chat_id, msg)
                 last_time = e_time
                 processed_items.add(e_link)
-                with open(processed_file, "a") as pf:
-                    pf.write(e_link + '\n')
+
+                info = res.info if res else None
+                store.record(
+                    conn,
+                    link=e_link,
+                    feed_url=url,
+                    title=e.get("title", ""),
+                    published=e_time.isoformat(),
+                    category=getattr(info, "category", None),
+                    location=getattr(info, "location", None),
+                    summary_ru=getattr(info, "summary_ru", None),
+                    practical_impact=getattr(info, "practical_impact", None),
+                    impact_reason=getattr(info, "impact_reason", None),
+                    scraped=getattr(res, "scraped", None),
+                    keywords=getattr(info, "keywords", ()) or (),
+                    sent_chat=str(target_chat_id),
+                )
             data[url] = "{}".format(last_time)
 except Exception as e:
     print("Error happened ", e)
     traceback.print_exc()
 finally:
     json.dump(data, open( config, 'w' ))
+    conn.close()

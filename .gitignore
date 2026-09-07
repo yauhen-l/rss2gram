@@ -1,2 +1,4 @@
 .env
 processed
+articles.db
+__pycache__/
