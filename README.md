@@ -38,18 +38,22 @@ python migrate_processed.py [path-to-processed]
 
 ## Daily digest
 
-`digest.py` aggregates the stored articles over a time window (default: last
-24h). It asks Claude (`cluster.py`) to group the window's articles into story
-clusters — `category` is a fixed enum, stable but too coarse to merge different
-feeds' takes on the same event, and raw keyword equality is too brittle. Each
-cluster is laid out under the category most of its articles carry; a top
-keywords block follows. Run it once a day from cron:
+`digest.py` takes the stored articles over a time window (default: last 24h) and
+sends a briefing to Telegram. `briefing.py` makes one Claude call that returns a
+country-first structure: grouped by the country the news is about, split into
+story sections (all Sachsen-Anhalt election articles become one section, etc.),
+each section carrying a 2–5 sentence Russian summary synthesised from the member
+articles' own stored summaries. Source links are listed compactly after each
+summary, not as the main content.
+
+Run once a day from cron:
 ```
 python digest.py                 # last 24h
 python digest.py --hours 48
 python digest.py --since 2026-09-06
-python digest.py --no-cluster     # skip the Claude call, one line per article
+python digest.py --no-llm         # skip Claude: flat country/category grouping, no summaries
 python digest.py --dry-run        # print instead of sending
 ```
-If the Claude call fails, it falls back to one line per article. It sends to
+Model: `DIGEST_MODEL` env var (default `claude-sonnet-5`). On any Claude/JSON
+failure it falls back to the flat `--no-llm` layout. Sends to
 `TELEGRAM_DIGEST_CHAT_ID`, falling back to `TELEGRAM_CHAT_ID`.

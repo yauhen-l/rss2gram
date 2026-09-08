@@ -1,15 +1,15 @@
 """Daily topic digest.
 
-Aggregates the articles ``rss2gram.py`` stored in SQLite over a time window
-(default: the last 24 hours), groups them into story clusters with Claude (see
-``cluster.py``), lays the clusters out under their category, and sends a compact
-summary to Telegram. Intended to be run once a day from cron.
+Pulls the articles ``rss2gram.py`` stored in SQLite over a time window (default:
+last 24h), asks Claude (see ``briefing.py``) to build a country-first briefing -
+grouped by country, split into story sections, each with a synthesised Russian
+summary - and sends it to Telegram. Meant to run once a day from cron.
 
 Usage:
     python digest.py                 # last 24h
-    python digest.py --hours 48      # last 48h
+    python digest.py --hours 48
     python digest.py --since 2026-09-06        # since local midnight of that day
-    python digest.py --no-cluster    # skip the Claude call, one line per article
+    python digest.py --no-llm        # skip Claude, flat country/category grouping
     python digest.py --dry-run       # print, do not send
 
 Chat id: TELEGRAM_DIGEST_CHAT_ID, falling back to TELEGRAM_CHAT_ID.
@@ -17,20 +17,34 @@ Chat id: TELEGRAM_DIGEST_CHAT_ID, falling back to TELEGRAM_CHAT_ID.
 
 import argparse
 import os
-from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import telebot
 from dotenv import load_dotenv
 
+import briefing
 import store
-from cluster import cluster as cluster_articles
 
 load_dotenv(Path(__file__).with_name(".env"))
 
 TG_LIMIT = 4000  # a little under Telegram's 4096 hard cap
-TOP_KEYWORDS = 15
+
+FLAGS = {
+    "Германия": "\U0001F1E9\U0001F1EA",
+    "Украина": "\U0001F1FA\U0001F1E6",
+    "Россия": "\U0001F1F7\U0001F1FA",
+    "США": "\U0001F1FA\U0001F1F8",
+    "Франция": "\U0001F1EB\U0001F1F7",
+    "Великобритания": "\U0001F1EC\U0001F1E7",
+    "Польша": "\U0001F1F5\U0001F1F1",
+    "Сербия": "\U0001F1F7\U0001F1F8",
+    "Гренландия": "\U0001F1EC\U0001F1F1",
+    "Северная Корея": "\U0001F1F0\U0001F1F5",
+    "Евросоюз": "\U0001F1EA\U0001F1FA",
+    "Международное": "\U0001F30D",
+    briefing.OTHER: "\U0001F5C2",
+}
 
 
 def parse_args():
@@ -38,7 +52,7 @@ def parse_args():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--hours", type=float, default=24.0)
     g.add_argument("--since", metavar="YYYY-MM-DD")
-    p.add_argument("--no-cluster", action="store_true")
+    p.add_argument("--no-llm", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -49,16 +63,13 @@ def cutoff(args) -> datetime:
     return datetime.now() - timedelta(hours=args.hours)
 
 
-def place(row) -> str:
-    for key in ("city", "region", "country"):
-        if row[key]:
-            return row[key]
-    return ""
+def flag(country: str) -> str:
+    return FLAGS.get(country, "\U0001F30D")
 
 
-def build(conn, since: datetime):
+def build_rows(conn, since: datetime):
     since_iso = since.isoformat()
-    cols = ["id", "link", "title", "category", "country", "region", "city"]
+    cols = ["id", "link", "title", "category", "country", "region", "city", "summary_ru"]
     rows = [
         dict(zip(cols, r))
         for r in conn.execute(
@@ -69,80 +80,61 @@ def build(conn, since: datetime):
             (since_iso,),
         )
     ]
-
-    kw_by_article = {}
-    kw_counts = Counter()
-    for aid, kw in conn.execute(
+    kw = {}
+    for aid, keyword in conn.execute(
         """SELECT kw.article_id, kw.keyword
-               FROM keywords kw
-               JOIN articles a ON a.id = kw.article_id
+               FROM keywords kw JOIN articles a ON a.id = kw.article_id
               WHERE a.published >= ?""",
         (since_iso,),
     ):
-        kw_by_article.setdefault(aid, []).append(kw)
-        kw_counts[kw] += 1
+        kw.setdefault(aid, []).append(keyword)
     for r in rows:
-        r["keywords"] = kw_by_article.get(r["id"], [])
-
-    return rows, kw_counts
-
-
-def _bullet(r) -> str:
-    loc = place(r)
-    loc = " — _{}_".format(loc) if loc else ""
-    return "• [{}]({}){}".format(r["title"], r["link"], loc)
+        r["keywords"] = kw.get(r["id"], [])
+    return rows
 
 
-def render(rows, kw_counts, clusters, since: datetime):
+def section_text(sec, by_id) -> str:
+    arts = [by_id[i] for i in sec["ids"] if i in by_id]
+    if not arts:
+        return ""
+    out = ["\n▸ *{}* ({})".format(sec["title"], len(arts))]
+    if sec.get("summary"):
+        out.append(sec["summary"])
+    refs = " ".join("[{}]({})".format(n, a["link"]) for n, a in enumerate(arts, 1))
+    out.append("_источники:_ " + refs)
+    return "\n".join(out)
+
+
+def render(rows, data, since: datetime):
     if not rows:
-        return ["\U0001F4F0 No articles since {:%Y-%m-%d %H:%M}.".format(since)]
+        return ["\U0001F4F0 Нет статей с {:%d.%m %H:%M}.".format(since)]
 
     by_id = {r["id"]: r for r in rows}
-
-    header = "\U0001F4F0 *Daily digest* — {n} articles / {c} topics since {t:%Y-%m-%d %H:%M}".format(
-        n=len(rows), c=len(clusters), t=since
+    n_sec = sum(len(g["sections"]) for g in data["groups"])
+    tag = " (без ИИ-группировки)" if data.get("fallback") else ""
+    header = "\U0001F4F0 *Дайджест* — {} статей, {} тем · {:%d.%m %H:%M}{}".format(
+        len(rows), n_sec, since, tag
     )
 
-    # attach each cluster to the category most of its articles carry
-    cat_clusters = {}
-    for c in clusters:
-        arts = [by_id[i] for i in c["ids"] if i in by_id]
-        if not arts:
-            continue
-        cat = Counter(a["category"] or "Other" for a in arts).most_common(1)[0][0]
-        cat_clusters.setdefault(cat, []).append((c["label"], arts))
+    def country_head(c):
+        return "{} *{}*".format(flag(c), c.upper())
 
-    blocks = [header]
-    for cat in sorted(cat_clusters):
-        items = cat_clusters[cat]
-        n = sum(len(a) for _, a in items)
-        # multi-article stories first (largest first), then singletons
-        items.sort(key=lambda it: -len(it[1]))
-        lines = ["\n*{}* ({})".format(cat, n)]
-        for label, arts in items:
-            if len(arts) == 1:
-                lines.append(_bullet(arts[0]))
+    msgs, cur, cur_country = [], header, None
+    for g in data["groups"]:
+        country = g["country"]
+        for sec in g["sections"]:
+            body = section_text(sec, by_id)
+            if not body:
+                continue
+            head = "" if country == cur_country else "\n\n" + country_head(country)
+            piece = head + "\n" + body
+            if len(cur) + len(piece) + 1 > TG_LIMIT:
+                msgs.append(cur)
+                cur = country_head(country) + " _(продолжение)_\n" + body
             else:
-                lines.append("▸ *{}* ({})".format(label, len(arts)))
-                lines += ["  " + _bullet(a) for a in arts]
-        blocks.append("\n".join(lines))
-
-    if kw_counts:
-        top = kw_counts.most_common(TOP_KEYWORDS)
-        blocks.append(
-            "\n\U0001F511 *Top keywords*\n"
-            + ", ".join("{} ({})".format(k, c) if c > 1 else k for k, c in top)
-        )
-
-    # pack blocks into <=TG_LIMIT messages
-    msgs, cur = [], ""
-    for b in blocks:
-        if cur and len(cur) + len(b) + 2 > TG_LIMIT:
-            msgs.append(cur)
-            cur = ""
-        cur = b if not cur else cur + "\n\n" + b
-    if cur:
-        msgs.append(cur)
+                cur += piece
+            cur_country = country
+    msgs.append(cur)
     return msgs
 
 
@@ -151,18 +143,14 @@ def main():
     since = cutoff(args)
 
     conn = store.connect()
-    rows, kw_counts = build(conn, since)
+    rows = build_rows(conn, since)
     conn.close()
 
-    if args.no_cluster:
-        clusters = [{"label": r["title"], "ids": [r["id"]]} for r in rows]
-    else:
-        clusters = cluster_articles(rows)
-
-    msgs = render(rows, kw_counts, clusters, since)
+    data = briefing._fallback(rows) if args.no_llm else briefing.build(rows)
+    msgs = render(rows, data, since)
 
     if args.dry_run:
-        print(("\n\n" + "-" * 60 + "\n\n").join(msgs))
+        print(("\n\n" + "=" * 60 + "\n\n").join(msgs))
         return
 
     chat_id = os.getenv("TELEGRAM_DIGEST_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
