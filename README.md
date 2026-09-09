@@ -39,21 +39,22 @@ python migrate_processed.py [path-to-processed]
 ## Daily digest
 
 `digest.py` takes the stored articles over a time window (default: last 24h) and
-sends a briefing to Telegram. `briefing.py` makes one Claude call that returns a
-country-first structure: grouped by the country the news is about, split into
-story sections (all Sachsen-Anhalt election articles become one section, etc.),
-each section carrying a 2–5 sentence Russian summary synthesised from the member
-articles' own stored summaries. Source links are listed compactly after each
-summary, not as the main content.
+sends a written, newspaper-style Russian digest to Telegram. `briefing.py` makes
+one Claude call that returns Markdown: articles about the same story are merged
+into one item with a single aggregated paragraph (all Sachsen-Anhalt election
+coverage becomes one block, no repetition), grouped by country then topic, most
+important to a Germany resident first. Source links trail each paragraph in
+parentheses.
 
 Run once a day from cron:
 ```
 python digest.py                 # last 24h
 python digest.py --hours 48
 python digest.py --since 2026-09-06
-python digest.py --no-llm         # skip Claude: flat country/category grouping, no summaries
+python digest.py --no-llm         # skip Claude: flat country/category list, no prose
 python digest.py --dry-run        # print instead of sending
 ```
-Model: `DIGEST_MODEL` env var (default `claude-sonnet-5`). On any Claude/JSON
-failure it falls back to the flat `--no-llm` layout. Sends to
-`TELEGRAM_DIGEST_CHAT_ID`, falling back to `TELEGRAM_CHAT_ID`.
+Model: `DIGEST_MODEL` env var (default `claude-sonnet-5`). On any Claude failure
+it falls back to the flat `--no-llm` layout. The digest is split across several
+Telegram messages when long. Sends to `TELEGRAM_DIGEST_CHAT_ID`, falling back to
+`TELEGRAM_CHAT_ID`.

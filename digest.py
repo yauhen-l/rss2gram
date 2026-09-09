@@ -1,15 +1,15 @@
 """Daily topic digest.
 
 Pulls the articles ``rss2gram.py`` stored in SQLite over a time window (default:
-last 24h), asks Claude (see ``briefing.py``) to build a country-first briefing -
-grouped by country, split into story sections, each with a synthesised Russian
-summary - and sends it to Telegram. Meant to run once a day from cron.
+last 24h) and sends a written, newspaper-style Russian digest to Telegram:
+``briefing.py`` makes one Claude call that merges same-story articles and groups
+them by country, then topic, most important first.
 
 Usage:
     python digest.py                 # last 24h
     python digest.py --hours 48
     python digest.py --since 2026-09-06        # since local midnight of that day
-    python digest.py --no-llm        # skip Claude, flat country/category grouping
+    python digest.py --no-llm        # skip Claude, flat country/category list
     python digest.py --dry-run       # print, do not send
 
 Chat id: TELEGRAM_DIGEST_CHAT_ID, falling back to TELEGRAM_CHAT_ID.
@@ -17,6 +17,7 @@ Chat id: TELEGRAM_DIGEST_CHAT_ID, falling back to TELEGRAM_CHAT_ID.
 
 import argparse
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -64,13 +65,13 @@ def cutoff(args) -> datetime:
 
 
 def flag(country: str) -> str:
-    return FLAGS.get(country, "\U0001F30D")
+    return FLAGS.get(country.strip(), "\U0001F30D")
 
 
 def build_rows(conn, since: datetime):
     since_iso = since.isoformat()
     cols = ["id", "link", "title", "category", "country", "region", "city", "summary_ru"]
-    rows = [
+    return [
         dict(zip(cols, r))
         for r in conn.execute(
             f"""SELECT {", ".join(cols)}
@@ -80,62 +81,65 @@ def build_rows(conn, since: datetime):
             (since_iso,),
         )
     ]
-    kw = {}
-    for aid, keyword in conn.execute(
-        """SELECT kw.article_id, kw.keyword
-               FROM keywords kw JOIN articles a ON a.id = kw.article_id
-              WHERE a.published >= ?""",
-        (since_iso,),
-    ):
-        kw.setdefault(aid, []).append(keyword)
-    for r in rows:
-        r["keywords"] = kw.get(r["id"], [])
-    return rows
 
 
-def section_text(sec, by_id) -> str:
-    arts = [by_id[i] for i in sec["ids"] if i in by_id]
-    if not arts:
-        return ""
-    out = ["\n▸ *{}* ({})".format(sec["title"], len(arts))]
-    if sec.get("summary"):
-        out.append(sec["summary"])
-    refs = " ".join("[{}]({})".format(n, a["link"]) for n, a in enumerate(arts, 1))
-    out.append("_источники:_ " + refs)
-    return "\n".join(out)
+def md_to_tg(md: str) -> str:
+    """Legacy-Markdown for Telegram: no ##/### headings, no ** bold."""
+    out = []
+    for line in md.splitlines():
+        m = re.match(r"^(#{1,2})\s+(.*)$", line)
+        if m:
+            name = m.group(2).strip().strip("*")
+            out.append("\n{} *{}*".format(flag(name), name.upper()))
+            continue
+        m = re.match(r"^#{3,}\s+(.*)$", line)
+        if m:
+            out.append("*{}*".format(m.group(1).strip().strip("*")))
+            continue
+        out.append(line.replace("**", "*"))
+    text = "\n".join(out)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def render(rows, data, since: datetime):
+def split_messages(text: str, first_prefix: str = "") -> list:
+    chunks, cur = [], first_prefix
+    for para in text.split("\n\n"):
+        add = ("\n\n" if cur else "") + para
+        if cur and len(cur) + len(add) > TG_LIMIT:
+            chunks.append(cur)
+            cur = para
+        else:
+            cur += add
+        while len(cur) > TG_LIMIT:  # a single oversized paragraph
+            chunks.append(cur[:TG_LIMIT])
+            cur = cur[TG_LIMIT:]
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def render_fallback(rows, data) -> str:
+    by_id = {r["id"]: r for r in rows}
+    lines = []
+    for g in data["groups"]:
+        lines.append("\n{} *{}*".format(flag(g["country"]), g["country"].upper()))
+        for sec in g["sections"]:
+            arts = [by_id[i] for i in sec["ids"] if i in by_id]
+            refs = " ".join("[{}]({})".format(n, a["link"]) for n, a in enumerate(arts, 1))
+            lines.append("*{}* ({})\n{}".format(sec["title"], len(arts), refs))
+    return "\n".join(lines).strip()
+
+
+def render(rows, data, since: datetime) -> list:
     if not rows:
         return ["\U0001F4F0 Нет статей с {:%d.%m %H:%M}.".format(since)]
 
-    by_id = {r["id"]: r for r in rows}
-    n_sec = sum(len(g["sections"]) for g in data["groups"])
-    tag = " (без ИИ-группировки)" if data.get("fallback") else ""
-    header = "\U0001F4F0 *Дайджест* — {} статей, {} тем · {:%d.%m %H:%M}{}".format(
-        len(rows), n_sec, since, tag
+    tag = " · без ИИ-сводки" if data.get("fallback") else ""
+    header = "\U0001F4F0 *Дайджест* — {} статей · {:%d.%m %H:%M}{}".format(
+        len(rows), since, tag
     )
-
-    def country_head(c):
-        return "{} *{}*".format(flag(c), c.upper())
-
-    msgs, cur, cur_country = [], header, None
-    for g in data["groups"]:
-        country = g["country"]
-        for sec in g["sections"]:
-            body = section_text(sec, by_id)
-            if not body:
-                continue
-            head = "" if country == cur_country else "\n\n" + country_head(country)
-            piece = head + "\n" + body
-            if len(cur) + len(piece) + 1 > TG_LIMIT:
-                msgs.append(cur)
-                cur = country_head(country) + " _(продолжение)_\n" + body
-            else:
-                cur += piece
-            cur_country = country
-    msgs.append(cur)
-    return msgs
+    body = render_fallback(rows, data) if data.get("fallback") else md_to_tg(data["markdown"])
+    return split_messages(body, header)
 
 
 def main():
@@ -147,6 +151,8 @@ def main():
     conn.close()
 
     data = briefing._fallback(rows) if args.no_llm else briefing.build(rows)
+    if data.get("stop_reason") not in (None, "end_turn"):
+        print("briefing stop_reason:", data.get("stop_reason"))
     msgs = render(rows, data, since)
 
     if args.dry_run:
