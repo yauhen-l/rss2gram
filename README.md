@@ -24,6 +24,43 @@ Config is in fomrat:
 }
 ```
 
+## Buttons (bot.py)
+
+`rss2gram.py` posts each new item (title + links) to `TELEGRAM_CHAT_ID` with a
+**Summary** button. It does no LLM work itself. `bot.py` is a long-running
+process that handles the button clicks:
+
+* **Summary** - scrapes the article, asks Claude for location/category/keywords/
+  4-sentence Russian summary, replies under the post (cached in the DB, so a
+  second click is free). The reply carries a **Send to useful Germany** button.
+* **Send to useful Germany** - copies the summary message to
+  `TELEGRAM_USEFUL_GERMANY_CHAT_ID`, once per article.
+
+```
+python rss2gram.py   # cron
+python bot.py        # service, same env vars as above
+```
+
+### Run bot.py as a systemd service
+
+`rss2gram-bot.service` is in the repo. It assumes user `vasa`, checkout in
+`/home/vasa/rss2gram` and a venv in `.venv`; edit `User=`, `WorkingDirectory=`
+and `ExecStart=` if yours differ. Secrets (`TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_USEFUL_GERMANY_CHAT_ID`, `ANTHROPIC_API_KEY`) are read from `.env`
+next to the scripts.
+
+```
+sudo cp rss2gram-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rss2gram-bot
+systemctl status rss2gram-bot
+journalctl -u rss2gram-bot -f      # logs
+```
+
+After updating the code: `git pull && sudo systemctl restart rss2gram-bot`.
+Run only one instance per bot token, otherwise Telegram returns a 409 error.
+Keep the cron job for `rss2gram.py`.
+
 ## Article store
 
 Sent articles are written to a local SQLite database `articles.db` (next to the

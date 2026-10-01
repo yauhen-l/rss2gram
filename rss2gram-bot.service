@@ -1,0 +1,15 @@
+[Unit]
+Description=rss2gram button bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vasa
+WorkingDirectory=/home/vasa/rss2gram
+ExecStart=/home/vasa/rss2gram/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

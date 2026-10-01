@@ -1,7 +1,8 @@
 import feedparser
 import telebot
+from telebot import types
 import requests
-from enrich import enrich
+import enrich as enrich_mod
 import store
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -20,7 +21,6 @@ data = json.load( open( config) )
 
 token = os.getenv('TELEGRAM_BOT_TOKEN')
 chat_id = os.getenv('TELEGRAM_CHAT_ID')
-useful_chat_id = os.getenv('TELEGRAM_USEFUL_GERMANY_CHAT_ID')
 bot = telebot.TeleBot(token, parse_mode="MARKDOWN")
 
 session = requests.Session()
@@ -53,54 +53,26 @@ try:
                     links += ' [COMMENTS]({comments})'.format(**e)
 
                 msg = '*{title}* \n '.format(**e) + links
-                target_chat_id = chat_id
-                res = None
-
-                try:
-                    res = enrich(e)
-                    info = res.info
-                    parts = (info.location.country, info.location.region, info.location.city)
-                    loc = ", ".join(p for p in parts if p) or "—"
-                    flag = "✅" if info.practical_impact else "➖"
-                    scrape_note = "" if res.scraped else "\n\U000026A0 summary from RSS teaser only"
-                    kw = ", ".join(info.keywords)
-                    kw_line = "\n\U0001F511 {}".format(kw) if kw else ""
-                    msg = "*{title}*\n{flag} \U0001F4CD {loc} | \U0001F3F7 {cat}{note}{kw_line}\n\n{summary}\n\n{links}".format(
-                        title=e["title"],
-                        flag=flag,
-                        loc=loc,
-                        cat=info.category,
-                        note=scrape_note,
-                        kw_line=kw_line,
-                        summary=info.summary_ru,
-                        links=links,
-                    )
-                    if info.practical_impact and useful_chat_id:
-                        target_chat_id = useful_chat_id
-                except Exception as ex:
-                    print("Enrich failed for " + e_link, ex)
-
                 print(msg)
-                bot.send_message(target_chat_id, msg)
-                last_time = e_time
-                processed_items.add(e_link)
 
-                info = res.info if res else None
-                store.record(
+                article_id = store.record(
                     conn,
                     link=e_link,
                     feed_url=url,
                     title=e.get("title", ""),
                     published=e_time.isoformat(),
-                    category=getattr(info, "category", None),
-                    location=getattr(info, "location", None),
-                    summary_ru=getattr(info, "summary_ru", None),
-                    practical_impact=getattr(info, "practical_impact", None),
-                    impact_reason=getattr(info, "impact_reason", None),
-                    scraped=getattr(res, "scraped", None),
-                    keywords=getattr(info, "keywords", ()) or (),
-                    sent_chat=str(target_chat_id),
+                    feed_text=enrich_mod.feed_text(e),
+                    sent_chat=str(chat_id),
                 )
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("Summary", callback_data="sum:{}".format(article_id)))
+                try:
+                    bot.send_message(chat_id, msg, reply_markup=markup)
+                except Exception:
+                    store.delete(conn, article_id)  # retry on next run
+                    raise
+                last_time = e_time
+                processed_items.add(e_link)
             data[url] = "{}".format(last_time)
 except Exception as e:
     print("Error happened ", e)

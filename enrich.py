@@ -131,7 +131,7 @@ class Result:
     scraped: bool  # False -> only the short RSS teaser was available
 
 
-def _feed_text(entry) -> str:
+def feed_text(entry) -> str:
     """Whatever body text the RSS entry already carries."""
     if getattr(entry, "content", None):
         return entry.content[0].value
@@ -156,7 +156,7 @@ def enrich(entry) -> Result:
 
     article = _scrape(link)
     scraped = bool(article)
-    body = (article or _feed_text(entry))[:MAX_BODY_CHARS]
+    body = (article or feed_text(entry))[:MAX_BODY_CHARS]
 
     messages = [{
         "role": "user",

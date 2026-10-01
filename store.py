@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS articles (
     practical_impact INTEGER,         -- 0/1/NULL
     impact_reason    TEXT,
     scraped          INTEGER,         -- 0/1/NULL
-    sent_chat        TEXT             -- Telegram chat id the message went to
+    sent_chat        TEXT,            -- Telegram chat id the message went to
+    feed_text        TEXT,            -- RSS teaser/body, fallback when scraping fails
+    forwarded        INTEGER NOT NULL DEFAULT 0  -- 1 once sent to the useful chat
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published);
 CREATE INDEX IF NOT EXISTS idx_articles_category  ON articles(category);
@@ -50,7 +52,18 @@ def connect(path=DB_PATH):
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn):
+    """Add columns introduced after the first schema version."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(articles)")}
+    if "feed_text" not in cols:
+        conn.execute("ALTER TABLE articles ADD COLUMN feed_text TEXT")
+    if "forwarded" not in cols:
+        conn.execute("ALTER TABLE articles ADD COLUMN forwarded INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
 
 
 def seen_links(conn) -> set:
@@ -72,14 +85,15 @@ def record(
     scraped=None,
     keywords=(),
     sent_chat=None,
+    feed_text=None,
 ):
-    """Insert one article. No-op if the link is already stored."""
+    """Insert one article and return its id. No-op (returns None) if the link is already stored."""
     cur = conn.execute(
         """INSERT OR IGNORE INTO articles
                (link, feed_url, title, published, fetched_at, category,
                 country, region, city, summary_ru, practical_impact,
-                impact_reason, scraped, sent_chat)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                impact_reason, scraped, sent_chat, feed_text)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             link,
             feed_url,
@@ -95,6 +109,7 @@ def record(
             impact_reason,
             None if scraped is None else int(scraped),
             sent_chat,
+            feed_text,
         ),
     )
     if cur.rowcount and cur.lastrowid is not None:
@@ -102,4 +117,44 @@ def record(
             "INSERT OR IGNORE INTO keywords (article_id, keyword) VALUES (?, ?)",
             [(cur.lastrowid, k) for k in keywords],
         )
+    conn.commit()
+    return cur.lastrowid if cur.rowcount else None
+
+
+def get(conn, article_id):
+    """Article row as a dict, or None."""
+    cur = conn.execute("SELECT * FROM articles WHERE id = ?", (article_id,))
+    row = cur.fetchone()
+    return dict(zip([d[0] for d in cur.description], row)) if row else None
+
+
+def save_enrichment(conn, article_id, info, scraped):
+    """Store on-demand enrichment for an article sent without it."""
+    loc = info.location
+    conn.execute(
+        """UPDATE articles
+              SET category = ?, country = ?, region = ?, city = ?,
+                  summary_ru = ?, practical_impact = ?, impact_reason = ?,
+                  scraped = ?
+            WHERE id = ?""",
+        (
+            info.category, loc.country, loc.region, loc.city, info.summary_ru,
+            int(info.practical_impact), info.impact_reason, int(scraped), article_id,
+        ),
+    )
+    conn.execute("DELETE FROM keywords WHERE article_id = ?", (article_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO keywords (article_id, keyword) VALUES (?, ?)",
+        [(article_id, k) for k in info.keywords],
+    )
+    conn.commit()
+
+
+def mark_forwarded(conn, article_id):
+    conn.execute("UPDATE articles SET forwarded = 1 WHERE id = ?", (article_id,))
+    conn.commit()
+
+
+def delete(conn, article_id):
+    conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
     conn.commit()
