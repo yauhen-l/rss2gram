@@ -162,4 +162,4 @@ def on_forward(call):
 
 
 if __name__ == "__main__":
-    bot.infinite_polling(allowed_updates=["callback_query"])
+    bot.polling(non_stop=True, allowed_updates=["callback_query"])
