@@ -1,5 +1,5 @@
 feedparser
-pyTelegramBotAPI
+pyTelegramBotAPI>=4.14
 requests
 anthropic
 pydantic>=2
