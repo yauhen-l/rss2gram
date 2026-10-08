@@ -23,7 +23,7 @@ _workspace_id = os.getenv("ANTHROPIC_WORKSPACE_ID")
 _headers = {"anthropic-workspace-id": _workspace_id} if _workspace_id else None
 client = anthropic.Anthropic(default_headers=_headers)
 
-# haiku-4-5 is cheaper; sonnet writes a markedly better digest. Overridable.
+# haiku-5-5 is cheaper; sonnet writes a markedly better digest. Overridable.
 MODEL = os.getenv("DIGEST_MODEL", "claude-sonnet-5")
 
 MAX_ARTICLES = 300

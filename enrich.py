@@ -26,7 +26,7 @@ _headers = {"anthropic-workspace-id": _workspace_id} if _workspace_id else None
 
 client = anthropic.Anthropic(default_headers=_headers)  # reads ANTHROPIC_API_KEY
 
-MODEL = "claude-haiku-4-5"  # "claude-opus-5" for higher quality at ~2.5x input cost
+MODEL = "claude-haiku-5-5"  # "claude-opus-5" for higher quality at ~2.5x input cost
 
 MAX_BODY_CHARS = 12000  # cap what we send to the model
 
