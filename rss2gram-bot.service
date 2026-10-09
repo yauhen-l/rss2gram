@@ -8,6 +8,7 @@ Type=simple
 User=vasa
 WorkingDirectory=/home/vasa/rss2gram
 ExecStart=/home/vasa/rss2gram/.venv/bin/python bot.py
+Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=5
 

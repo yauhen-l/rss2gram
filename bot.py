@@ -214,7 +214,12 @@ def _summarise_link(conn, url):
     return load(conn, article_id)
 
 
-@bot.message_handler(func=lambda m: bool(_urls(m)) and _mentions_bot(m), content_types=["text", "photo"])
+def _is_link_mention(m):
+    return bool(_urls(m)) and _mentions_bot(m)
+
+
+@bot.message_handler(func=_is_link_mention, content_types=["text", "photo"])
+@bot.channel_post_handler(func=_is_link_mention, content_types=["text", "photo"])
 def on_link_mention(message):
     for url in _urls(message):
         conn = store.connect()
@@ -236,5 +241,12 @@ def on_link_mention(message):
             conn.close()
 
 
+def _log_updates(messages):
+    for m in messages:
+        print("update: chat={} type={} text={!r}".format(m.chat.id, m.chat.type, (m.text or m.caption or "")[:80]), flush=True)
+
+
+bot.set_update_listener(_log_updates)
+
 if __name__ == "__main__":
-    bot.polling(non_stop=True, allowed_updates=["callback_query", "message"])
+    bot.polling(non_stop=True, allowed_updates=["callback_query", "message", "channel_post"])
