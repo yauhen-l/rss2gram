@@ -1,6 +1,7 @@
 """Long-running bot that handles the inline buttons on posts from rss2gram.py.
 
   * "Summary"               - enrich the article on demand and reply with the summary;
+  * mention the bot in a message containing a link - it replies with a summary of that link;
   * "Send to useful Germany" - forward the article to TELEGRAM_USEFUL_GERMANY_CHAT_ID.
 
 Run it as a service (rss2gram.py stays a cron job):
@@ -9,6 +10,7 @@ Run it as a service (rss2gram.py stays a cron job):
 
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -161,5 +163,78 @@ def on_forward(call):
         conn.close()
 
 
+def _urls(message):
+    """Distinct http(s) links in a message, in order (plain URLs and text links)."""
+    text = message.text or message.caption or ""
+    entities = message.entities or message.caption_entities or []
+    urls = []
+    for e in entities:
+        if e.type == "url":
+            url = text[e.offset : e.offset + e.length]  # noqa: E203
+        elif e.type == "text_link":
+            url = e.url
+        else:
+            continue
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _mentions_bot(message):
+    text = message.text or message.caption or ""
+    entities = message.entities or message.caption_entities or []
+    name = "@" + bot.get_me().username.lower()
+    return any(
+        e.type == "mention" and text[e.offset : e.offset + e.length].lower() == name  # noqa: E203
+        for e in entities
+    )
+
+
+def _summarise_link(conn, url):
+    """Article row for a user-posted link, enriching and storing it if new."""
+    row = conn.execute("SELECT id FROM articles WHERE link = ?", (url,)).fetchone()
+    article = load(conn, row[0]) if row else None
+    if article and article["summary_ru"]:
+        return article
+
+    res = enrich(SimpleNamespace(title="", link=url, summary=""))
+    if article:
+        article_id = article["id"]
+    else:
+        article_id = store.record(
+            conn,
+            link=url,
+            feed_url="manual",
+            title=res.title or url,
+            published=datetime.now().isoformat(timespec="seconds"),
+        )
+    store.save_enrichment(conn, article_id, res.info, res.scraped)
+    return load(conn, article_id)
+
+
+@bot.message_handler(func=lambda m: bool(_urls(m)) and _mentions_bot(m), content_types=["text", "photo"])
+def on_link_mention(message):
+    for url in _urls(message):
+        conn = store.connect()
+        try:
+            article = _summarise_link(conn, url)
+            send(
+                message.chat.id,
+                summary_text(article),
+                reply_to_message_id=message.message_id,
+                reply_markup=summary_markup(article),
+                disable_web_page_preview=True,
+            )
+        except Exception as ex:  # noqa: BLE001
+            print("Summary failed for " + url, ex)
+            bot.send_message(
+                message.chat.id, "Failed to summarise: {}".format(ex), reply_to_message_id=message.message_id
+            )
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":
-    bot.polling(non_stop=True, allowed_updates=["callback_query"])
+    bot.polling(non_stop=True, allowed_updates=["callback_query", "message"])

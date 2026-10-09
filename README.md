@@ -35,6 +35,10 @@ process that handles the button clicks:
   second click is free). The reply carries a **Send to useful Germany** button.
 * **Send to useful Germany** - copies the summary message to
   `TELEGRAM_USEFUL_GERMANY_CHAT_ID`, once per article.
+* **Mention + link** - post a link in the chat and mention the bot
+  (`@yourbot https://...`): it replies with the same summary (stored in the DB
+  with `feed_url = 'manual'`, cached per link). In groups the bot must be a member;
+  mentions reach it even with privacy mode on.
 
 ```
 python rss2gram.py   # cron

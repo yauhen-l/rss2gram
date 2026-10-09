@@ -129,6 +129,7 @@ def _parse_reply(text: str) -> ArticleInfo:
 class Result:
     info: ArticleInfo
     scraped: bool  # False -> only the short RSS teaser was available
+    title: str = ""  # entry title, else the scraped page title
 
 
 def feed_text(entry) -> str:
@@ -138,23 +139,24 @@ def feed_text(entry) -> str:
     return getattr(entry, "summary", "") or ""
 
 
-def _scrape(url: str) -> str:
-    """Best-effort full article text. Empty string on any failure."""
+def _scrape(url: str):
+    """Best-effort (full article text, page title). Empty strings on any failure."""
     try:
         resp = requests.get(url, headers={"User-Agent": _UA}, timeout=15)
         resp.raise_for_status()
         text = trafilatura.extract(resp.text, url=url) or ""
-        return text.strip()
+        meta = trafilatura.extract_metadata(resp.text, default_url=url)
+        return text.strip(), (meta.title if meta and meta.title else "")
     except Exception as ex:  # noqa: BLE001 - scraping is best-effort
         print("Scrape failed for " + url, ex)
-        return ""
+        return "", ""
 
 
 def enrich(entry) -> Result:
-    title = getattr(entry, "title", "")
     link = entry.link
 
-    article = _scrape(link)
+    article, page_title = _scrape(link)
+    title = getattr(entry, "title", "") or page_title
     scraped = bool(article)
     body = (article or feed_text(entry))[:MAX_BODY_CHARS]
 
@@ -173,7 +175,7 @@ def enrich(entry) -> Result:
         )
         text = "".join(b.text for b in response.content if b.type == "text")
         try:
-            return Result(info=_parse_reply(text), scraped=scraped)
+            return Result(info=_parse_reply(text), scraped=scraped, title=title)
         except Exception as ex:  # noqa: BLE001 - retry once with the model's own output
             last_err = ex
             messages += [
