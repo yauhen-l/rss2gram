@@ -84,6 +84,14 @@ def send(chat_id, text, **kwargs):
         return bot.send_message(chat_id, text, parse_mode=None, **kwargs)
 
 
+def answer(call, text):
+    """Answer a callback query; ignore Telegram rejecting a stale/invalid query id."""
+    try:
+        bot.answer_callback_query(call.id, text)
+    except telebot.apihelper.ApiTelegramException as ex:
+        print("answer_callback_query failed:", ex, flush=True)
+
+
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("sum:"))
 def on_summary(call):
     article_id = int(call.data.split(":", 1)[1])
@@ -91,13 +99,13 @@ def on_summary(call):
 
     with _lock:
         if article_id in _in_progress:
-            bot.answer_callback_query(call.id, "Already working on it")
+            answer(call, "Already working on it")
             return
         _in_progress.add(article_id)
-    bot.answer_callback_query(call.id, "Summarising…")
 
     conn = store.connect()
     try:
+        answer(call, "Summarising…")
         article = load(conn, article_id)
         if not article:
             bot.send_message(msg.chat.id, "Article not found in the database", reply_to_message_id=msg.message_id)
@@ -140,21 +148,21 @@ def on_summary(call):
 def on_forward(call):
     article_id = int(call.data.split(":", 1)[1])
     if not useful_chat_id:
-        bot.answer_callback_query(call.id, "TELEGRAM_USEFUL_GERMANY_CHAT_ID is not set")
+        answer(call, "TELEGRAM_USEFUL_GERMANY_CHAT_ID is not set")
         return
 
     conn = store.connect()
     try:
         article = load(conn, article_id)
         if not article:
-            bot.answer_callback_query(call.id, "Article not found")
+            answer(call, "Article not found")
             return
         if article["forwarded"]:
-            bot.answer_callback_query(call.id, "Already sent")
+            answer(call, "Already sent")
             return
         send(useful_chat_id, summary_text(article), disable_web_page_preview=True)
         store.mark_forwarded(conn, article_id)
-        bot.answer_callback_query(call.id, "Sent to useful Germany")
+        answer(call, "Sent to useful Germany")
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
         except telebot.apihelper.ApiTelegramException:
